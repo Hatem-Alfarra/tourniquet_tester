@@ -64,7 +64,15 @@ void setup() {
 }
 
 void calibrationAsk(){
-   while(true){
+   int refreshRatePerSec = 10;
+   int timeLeftInSec = 5;
+
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print("Calibrate?");
+
+   int timeLeft = refreshRatePerSec * timeLeftInSec;
+   while(timeLeft--){
       int intentFill, total;
       total = 7;
 
@@ -80,26 +88,34 @@ void calibrationAsk(){
       int intentLevel = THRESHOLD / total;          // value needed per intentLevel (ie. step or "#")
 
       intentFill = absAdjusted / intentLevel;
+      
+      timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1);
+      // timer
+      lcd.setCursor(13, 0);
+      lcd.print(timeLeftInSec);
+      lcd.print("s ");
 
       drawBar(intentFill, total);
 
-      if (intentFill >= total){
+      if (intentFill >= total)
+      {
          confirm(calibrate, calibrationAsk);
          return;
       }
-   delay(100);
+      delay(1000/refreshRatePerSec);
    }
+   lcd.clear();
 }
 
 void confirm(void (*functionPass)(), void (*functionFail)()){
    int refreshRatePerSec = 10;
-   int timeLeftConfirm = 3;
+   int timeLeftConfirmInSec = 3;
 
    float raw = scale.read();
    long adjusted = raw - zeroOffset;
    long absAdjusted = abs(adjusted);
    
-   timeLeftConfirm = refreshRatePerSec * (timeLeftConfirm + 1);
+   int timeLeftConfirm = refreshRatePerSec * timeLeftConfirmInSec;
    while (timeLeftConfirm-- && (absAdjusted >= THRESHOLD/2))
    {  
       raw = scale.read();
@@ -109,7 +125,7 @@ void confirm(void (*functionPass)(), void (*functionFail)()){
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("Hold for ");
-      lcd.print(timeLeftConfirm/refreshRatePerSec);
+      lcd.print(((timeLeftConfirm/refreshRatePerSec)+1));
       lcd.setCursor(0, 1);
       lcd.print("sec to confirm");
       delay(1000/refreshRatePerSec);
@@ -123,9 +139,6 @@ void confirm(void (*functionPass)(), void (*functionFail)()){
 }
 
 void drawBar(int intentFill, int total){
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print("Calibrate?");
    lcd.setCursor(0, 1);
    lcd.print("No [");
    for (int i=0; i < total; i++)
@@ -147,10 +160,27 @@ void calibrate(){
    lcd.clear();
    lcd.setCursor(0, 0);
    lcd.print("Calibration Mode");
+
+   // loop over desired pressures
+   // check if value is valid and if so store each in code
+   // if all values are valid setCalibrationValues()
+   // set calibration signiture if not set already
+
+}
+
+float adjustedToPressure(long sensorValAdjusted){
+   Serial.print(sensorValAdjusted);
 }
 
 // TODO: Might convert code to a state machine
 void loop(){
+   lcd.setCursor(0, 0);
+   lcd.print("In loop()");
+   // Check if calibration values were set before
+   // if not message that Unit tester never calibrated before. back to calibrationAsk().
+   // if so, read values once and store them in code (array) to use.
+
+   // call adjustedToPressure()
 
 }
 
@@ -179,23 +209,23 @@ void loop(){
    // If failed then go back to CalibrateAsk()
 
 // setCalibrationValues()
-   // read from EERPOM. Set values.
+   // set EERPOM. Set values.
 // 
 
-// notInitializedBefore()
+// notInitializedBeforeWarning()
    // Through warning that the unit has not been initialized before with calibration data
    // call calibration ask.
 
-// rawToPressure()
+// adjustedToPressure()
    // convert raw measurment to pressure using Pressures[] and rawValues[].
    // Interpolation in range, extrapolation outside range (outside not accurate)
 
 // loop()
    // read raw values
-   // call rawtoPressure() to get pressure
+   // call adjustedtoPressure() to get pressure
    // display pressure
 
-// Issues how do I make sure threshold is not too low during CalibrateAsk()? I do not want yes to be accidental (maybe very unlikely)
+// Issues: how do I make sure threshold is not too low during CalibrateAsk()? I do not want yes to be accidental (maybe very unlikely)
 
 
 
