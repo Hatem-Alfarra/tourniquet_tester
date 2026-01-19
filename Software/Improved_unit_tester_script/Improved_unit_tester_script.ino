@@ -15,6 +15,11 @@
 #include "HX711.h"
 #include <LiquidCrystal_I2C.h>
 
+// functions prototypes
+void calibrationAsk();
+void confirm();
+void drawBar(int, int);
+
 
 HX711 scale;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -23,19 +28,95 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 #define DT_PIN  3
 #define SCK_PIN 2
 
+// Global variables
+const int ADDRESS_CALIBRATION_SIGNATURE = 0;
+// Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EERPOM if calibration set before at least once
+const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
+
+const long THRESHOLD = 50000;                       // adjust this during first set up
+long zeroOffset;
+bool isPositiveDirectionality;
+
+bool isCalibrateMode = false;
+
+
+// functions
+
 void setup() {
   
   Serial.begin(9600);
 
+  // Initialize HX711
+  scale.begin(DT_PIN, SCK_PIN);
+
    // Initialize LCD
   lcd.init();
   lcd.backlight();
-  // Tare / Zero out scale
+  // Collect offset
   lcd.setCursor(0, 0);
-  lcd.print("Zeroing...")
-  scale.tare(20);
-  
+  lcd.print("Zeroing...");
+  zeroOffset = scale.read_average(15);
+  lcd.clear();
 
+  calibrationAsk();
+}
+
+void calibrationAsk(){
+   while(true){
+      int intentFill, total;
+      total = 7;
+
+      float raw = scale.read();
+      long adjusted = raw - zeroOffset;
+      long absAdjusted = abs(adjusted);
+
+      // CHANGE: Move to later in the code. Directionality determined at the threshold and not by fluctuations
+      if (adjusted >= 0){
+         isPositiveDirectionality = true;
+      } else { isPositiveDirectionality = false; }
+      
+      int intentLevel = THRESHOLD / total;          // value needed per intentLevel (ie. step or "#")
+
+      intentFill = absAdjusted / intentLevel;
+
+      drawBar(intentFill, total);
+
+      if (intentFill >= total){
+         confirm();
+         return;
+      }
+   delay(100);
+   }
+}
+
+void confirm(){
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print("In confirm()");
+   delay(5000);
+}
+
+void drawBar(int intentFill, int total){
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print("Calibrate?");
+   lcd.setCursor(0, 1);
+   lcd.print("No [");
+   for (int i=0; i < total; i++)
+   {
+      if (i < intentFill)
+      {
+         lcd.print("#");          // Intent bar can later be changed to look prettier
+      } 
+      else 
+      {
+         lcd.print(" ");
+      }
+   }
+   lcd.print("] Yes");
+}
+
+void loop(){
 
 }
 
@@ -43,35 +124,35 @@ void setup() {
    // initial setup
    // call CalibrationAsk()
 
-// CalibrateAsk()
+// calibrateAsk()
    // Calibrate? No [||||   ] Yes. 5 sec. button push could be negative so use abs() and determine scale factor directionality.
    // If yes, confirm then go to calibration(). No confirm then go back to CalibrateAsk().
    // If no, check EERPOM for setUpConfirmationNumber 
    //             -> if foundConfirmationNum == setUpConfirmationNum then call SetCalibrationValues(), then loop()
    //             -> else call NotInitializedBefore()
 
-// Confirm()
-   // Keep holding for 2 seconds. "Hold to confirm"
+// confirm()
+   // Keep holding for 2 seconds. "Hold to confirm". 
    // -> success then go to Calibration()
    // -> else back to calibrate ask.
 
-// Calibration() "Calibration mode"
+// calibration() "Calibration mode"
    // Instruction: Set cuff pressure to #.# mmHg. Stable? "save" readings : wait
-   // Confirm reading is higher than 0 reading and previous reading (raw should increase every step) until all readings done.
+   // Confirm reading is higher than 0 reading and previous reading (raw should increase every intentLevel) until all readings done.
    // Only if done successfully save (write) to EERPOM.
    // --> Store values in code (arrays). SetCalibrationValues()
    // --> Success message, then normal mode (ie. loop())
    // If failed then go back to CalibrateAsk()
 
-// SetCalibrationValues()
+// setCalibrationValues()
    // read from EERPOM. Set values.
 // 
 
-// NotInitializedBefore()
+// notInitializedBefore()
    // Through warning that the unit has not been initialized before with calibration data
    // call calibration ask.
 
-// RawToPressure()
+// rawToPressure()
    // convert raw measurment to pressure using Pressures[] and rawValues[].
    // Interpolation in range, extrapolation outside range (outside not accurate)
 
