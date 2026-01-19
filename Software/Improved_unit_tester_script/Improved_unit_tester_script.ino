@@ -17,8 +17,10 @@
 
 // functions prototypes
 void calibrationAsk();
-void confirm();
+void confirm(void (*functionPass)(), void (*functionFail)());
 void drawBar(int, int);
+void calibrate();
+
 
 
 HX711 scale;
@@ -82,18 +84,42 @@ void calibrationAsk(){
       drawBar(intentFill, total);
 
       if (intentFill >= total){
-         confirm();
+         confirm(calibrate, calibrationAsk);
          return;
       }
    delay(100);
    }
 }
 
-void confirm(){
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print("In confirm()");
-   delay(5000);
+void confirm(void (*functionPass)(), void (*functionFail)()){
+   int refreshRatePerSec = 10;
+   int timeLeftConfirm = 3;
+
+   float raw = scale.read();
+   long adjusted = raw - zeroOffset;
+   long absAdjusted = abs(adjusted);
+   
+   timeLeftConfirm = refreshRatePerSec * (timeLeftConfirm + 1);
+   while (timeLeftConfirm-- && (absAdjusted >= THRESHOLD/2))
+   {  
+      raw = scale.read();
+      adjusted = raw - zeroOffset;
+      absAdjusted = abs(adjusted);
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Hold for ");
+      lcd.print(timeLeftConfirm/refreshRatePerSec);
+      lcd.setCursor(0, 1);
+      lcd.print("sec to confirm");
+      delay(1000/refreshRatePerSec);
+   }
+   if (absAdjusted < THRESHOLD/2) 
+   {
+       (*functionFail)(); 
+   } else {
+       (*functionPass)(); 
+   }
 }
 
 void drawBar(int intentFill, int total){
@@ -106,7 +132,7 @@ void drawBar(int intentFill, int total){
    {
       if (i < intentFill)
       {
-         lcd.print("#");          // Intent bar can later be changed to look prettier
+         lcd.print("#");                            // Intent bar can later be changed to look prettier
       } 
       else 
       {
@@ -116,6 +142,14 @@ void drawBar(int intentFill, int total){
    lcd.print("] Yes");
 }
 
+
+void calibrate(){
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print("Calibration Mode");
+}
+
+// TODO: Might convert code to a state machine
 void loop(){
 
 }
@@ -136,7 +170,7 @@ void loop(){
    // -> success then go to Calibration()
    // -> else back to calibrate ask.
 
-// calibration() "Calibration mode"
+// calibrate() "calibration mode"
    // Instruction: Set cuff pressure to #.# mmHg. Stable? "save" readings : wait
    // Confirm reading is higher than 0 reading and previous reading (raw should increase every intentLevel) until all readings done.
    // Only if done successfully save (write) to EERPOM.
