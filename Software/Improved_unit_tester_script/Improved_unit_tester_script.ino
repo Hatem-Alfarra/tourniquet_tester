@@ -15,37 +15,42 @@
 #include "HX711.h"
 #include <LiquidCrystal_I2C.h>
 
+// HX711 pins
+#define DT_PIN  3
+#define SCK_PIN 2
+
 // functions prototypes
 void calibrationAsk();
 void confirm(void (*functionPass)(), void (*functionFail)());
-void drawBar(int, int);
+void drawBar(int intentFill, int total);
 void calibrate();
-
+float adjustedToPressure(long sensorValAdjusted);
+void printLCD(const char* line1, const char* line2 = nullptr, int waitMs = 0);
+long readAdjustedStable();
+void getCalibrationValues();
+void setCalibrationValues();
+long readSensorAdjusted();
 
 
 HX711 scale;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// HX711 pins
-#define DT_PIN  3
-#define SCK_PIN 2
 
 // Global variables
 const int ADDRESS_CALIBRATION_SIGNATURE = 0;
-// Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EERPOM if calibration set before at least once
+// Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EEPROM if calibration set before at least once
 const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
-
-const long THRESHOLD = 50000;                       // adjust this during first set up
+const long THRESHOLD = 50000;                                      // adjust this during first set up
 long zeroOffset;
-bool isPositiveDirectionality;
-
-bool isCalibrateMode = false;
+int pressure[] = {60, 90, 120, 150, 180, 210, 240, 270};
+const int refSize = sizeof(pressure) / sizeof(pressure[0]);
+long refValues[refSize];
 
 
 // functions
 
-void setup() {
-  
+void setup() 
+{ 
   Serial.begin(9600);
 
   // Initialize HX711
@@ -55,42 +60,34 @@ void setup() {
   lcd.init();
   lcd.backlight();
   // Collect offset
-  lcd.setCursor(0, 0);
-  lcd.print("Zeroing...");
+  printLCD("Zeroing...");
   zeroOffset = scale.read_average(15);
   lcd.clear();
 
   calibrationAsk();
 }
 
-void calibrationAsk(){
+void calibrationAsk()
+{
    int refreshRatePerSec = 10;
    int timeLeftInSec = 5;
 
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print("Calibrate?");
+   printLCD("Calibrate?");
 
    int timeLeft = refreshRatePerSec * timeLeftInSec;
-   while(timeLeft--){
+   while(timeLeft--)
+   {
       int intentFill, total;
       total = 7;
 
-      float raw = scale.read();
-      long adjusted = raw - zeroOffset;
-      long absAdjusted = abs(adjusted);
-
-      // CHANGE: Move to later in the code. Directionality determined at the threshold and not by fluctuations
-      if (adjusted >= 0){
-         isPositiveDirectionality = true;
-      } else { isPositiveDirectionality = false; }
+      long absAdjusted = readSensorAdjusted();
       
-      int intentLevel = THRESHOLD / total;          // value needed per intentLevel (ie. step or "#")
+      int intentLevel = THRESHOLD / total;                         // value needed per intentLevel (ie. step or "#")
 
       intentFill = absAdjusted / intentLevel;
       
-      timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1);
-      // timer
+      timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
+      // display timer
       lcd.setCursor(13, 0);
       lcd.print(timeLeftInSec);
       lcd.print("s ");
@@ -107,47 +104,52 @@ void calibrationAsk(){
    lcd.clear();
 }
 
-void confirm(void (*functionPass)(), void (*functionFail)()){
+void confirm(void (*functionPass)(), void (*functionFail)())
+{
    int refreshRatePerSec = 10;
    int timeLeftConfirmInSec = 3;
 
-   float raw = scale.read();
-   long adjusted = raw - zeroOffset;
-   long absAdjusted = abs(adjusted);
-   
+   long absAdjusted = readSensorAdjusted();
+
    int timeLeftConfirm = refreshRatePerSec * timeLeftConfirmInSec;
+
+   printLCD("Hold for", "sec to confirm");
+
    while (timeLeftConfirm-- && (absAdjusted >= THRESHOLD/2))
    {  
-      raw = scale.read();
-      adjusted = raw - zeroOffset;
-      absAdjusted = abs(adjusted);
+      absAdjusted = readSensorAdjusted();
 
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Hold for ");
-      lcd.print(((timeLeftConfirm/refreshRatePerSec)+1));
-      lcd.setCursor(0, 1);
-      lcd.print("sec to confirm");
+      int seconds = ((timeLeftConfirm/refreshRatePerSec)+1);
+      lcd.setCursor(9, 0);
+      lcd.print("  ");                                             // Clear previous number
+      lcd.setCursor(9, 0);
+      lcd.print(seconds);
+
       delay(1000/refreshRatePerSec);
    }
+
    if (absAdjusted < THRESHOLD/2) 
    {
-       (*functionFail)(); 
-   } else {
-       (*functionPass)(); 
+      // call function for failed confirmation
+      (*functionFail)(); 
+
+   } else 
+   {
+      // call function for passed confirmation
+      (*functionPass)(); 
    }
 }
 
-void drawBar(int intentFill, int total){
+void drawBar(int intentFill, int total)
+{
    lcd.setCursor(0, 1);
    lcd.print("No [");
    for (int i=0; i < total; i++)
    {
       if (i < intentFill)
       {
-         lcd.print("#");                            // Intent bar can later be changed to look prettier
-      } 
-      else 
+         lcd.print("#");                                           // Intent bar can later be changed to look prettier
+      } else 
       {
          lcd.print(" ");
       }
@@ -155,33 +157,155 @@ void drawBar(int intentFill, int total){
    lcd.print("] Yes");
 }
 
-
-void calibrate(){
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print("Calibration Mode");
-
+void calibrate()
+{
+   printLCD("Calibration Mode", "", 3000);
+   
+   int i;
    // loop over desired pressures
-   // check if value is valid and if so store each in code
-   // if all values are valid setCalibrationValues()
-   // set calibration signiture if not set already
+   for (i = 0; i < refSize; i++)
+   {
+      int curPressure = pressure[i];
+      long curReading;
 
+      int maxTries = 3;
+      int numTries = 0;
+
+      long previous;
+
+      if (i == 0) 
+      {
+         previous = 0;
+      } else 
+      {
+         previous = refValues[i-1];
+      }
+
+      printLCD("Set cuff", "to     mmHg");           
+      lcd.setCursor(3, 1);
+      lcd.print(curPressure);
+      delay(5000);                                                 // delay to allow user to set the cuff to correct pressure
+
+      printLCD("Collecting", "values...");
+      curReading = readAdjustedStable();
+      numTries += 1;
+      delay(2000);         
+
+      while (curReading == 0 && numTries < maxTries)
+      {
+         numTries += 1;
+
+         printLCD("Reading unstable!", "", 2000);
+
+         printLCD("Set cuff", "to     mmHg");           
+         lcd.setCursor(3, 1);
+         lcd.print(curPressure);
+         delay(5000);                                              // delay to allow user to set the cuff to correct pressure
+
+         printLCD("Collecting", "values...");
+         curReading = readAdjustedStable();
+         delay(2000);
+      }
+      
+      if (numTries == maxTries)
+      {
+         printLCD("Unstable readings", "", 2000);
+
+         printLCD("Reverting to pre", "-vious settings", 4000);
+
+         // Disregard changes and set refValues[] back to previous settings
+         getCalibrationValues();
+
+         printLCD("Normal mode");
+         
+         break;
+      } else if (curReading > previous) 
+      {
+         refValues[i] = curReading;
+      } else 
+      {
+         printLCD("Value lower", "than expected", 2000);
+
+         printLCD("Reverting to pre", "-vious settings", 5000);
+
+         // Disregard changes and set refValues[] back to previous settings
+         getCalibrationValues();
+
+         break;
+      }
+   }
+   // if all reference values were collected
+   if (i == refSize)
+   {   
+      // write to EEPROM the new ref value (from refValues[])
+      setCalibrationValues();
+      printLCD("Calibration", "successful", 2000);
+      printLCD("Normal mode", "", 2000);
+      // Arduino logic goes to loop() directly
+   } else
+   {
+      // Disregard changes and set refValues[] back to previous settings
+      getCalibrationValues();
+   }
 }
 
-float adjustedToPressure(long sensorValAdjusted){
+void printLCD(const char* line1, const char* line2, int waitMs)
+{
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print(line1);
+   if (line2)
+   {
+      lcd.setCursor(0, 1);
+      lcd.print(line2);
+   }
+
+   if (waitMs > 0) delay(waitMs);
+}
+
+long readAdjustedStable()
+{
+   return readSensorAdjusted();
+   // To Do: check if stable values. If not return 0.
+}
+
+void getCalibrationValues()
+{
+   // EEPROM.read(ADDRESS_CALIBRATION_SIGNATURE);
+   return;
+}
+
+void setCalibrationValues()
+{
+   return;
+}
+
+float adjustedToPressure(long sensorValAdjusted)
+{
    Serial.print(sensorValAdjusted);
 }
 
+long readSensorAdjusted()
+{
+   float raw = scale.read();
+   long adjusted = abs(raw - zeroOffset);
+   return adjusted;
+}
+
 // TODO: Might convert code to a state machine
-void loop(){
+void loop()
+{
+   lcd.clear();
    lcd.setCursor(0, 0);
    lcd.print("In loop()");
+
    // Check if calibration values were set before
    // if not message that Unit tester never calibrated before. back to calibrationAsk().
    // if so, read values once and store them in code (array) to use.
 
    // call adjustedToPressure()
 
+   delay(500);
 }
 
 // setup()
@@ -191,7 +315,7 @@ void loop(){
 // calibrateAsk()
    // Calibrate? No [||||   ] Yes. 5 sec. button push could be negative so use abs() and determine scale factor directionality.
    // If yes, confirm then go to calibration(). No confirm then go back to CalibrateAsk().
-   // If no, check EERPOM for setUpConfirmationNumber 
+   // If no, check EEPROM for setUpConfirmationNumber 
    //             -> if foundConfirmationNum == setUpConfirmationNum then call SetCalibrationValues(), then loop()
    //             -> else call NotInitializedBefore()
 
@@ -203,13 +327,13 @@ void loop(){
 // calibrate() "calibration mode"
    // Instruction: Set cuff pressure to #.# mmHg. Stable? "save" readings : wait
    // Confirm reading is higher than 0 reading and previous reading (raw should increase every intentLevel) until all readings done.
-   // Only if done successfully save (write) to EERPOM.
+   // Only if done successfully save (write) to EEPROM.
    // --> Store values in code (arrays). SetCalibrationValues()
    // --> Success message, then normal mode (ie. loop())
    // If failed then go back to CalibrateAsk()
 
 // setCalibrationValues()
-   // set EERPOM. Set values.
+   // set EEPROM. Set values.
 // 
 
 // notInitializedBeforeWarning()
@@ -225,7 +349,7 @@ void loop(){
    // call adjustedtoPressure() to get pressure
    // display pressure
 
-// Issues: how do I make sure threshold is not too low during CalibrateAsk()? I do not want yes to be accidental (maybe very unlikely)
+// Issues: how do I make sure threshold is not too low during CalibrateAsk()? I do not want yes to be accidental. -> If threshold is too low calibration mode would start but not finish (assuming normal sensor fluctuations)
 
 
 
