@@ -42,8 +42,8 @@ const int ADDRESS_CALIBRATION_SIGNATURE = 0;
 const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
 const long THRESHOLD = 50000;                                      // adjust this during first set up
 long zeroOffset;
-int pressure[] = {60, 90, 120, 150, 180, 210, 240, 270};
-const int refSize = sizeof(pressure) / sizeof(pressure[0]);
+int pressures[] = {60, 90, 120, 150, 180, 210, 240, 270};
+const int refSize = sizeof(pressures) / sizeof(pressures[0]);
 long refValues[refSize];
 
 
@@ -165,7 +165,7 @@ void calibrate()
    // loop over desired pressures
    for (i = 0; i < refSize; i++)
    {
-      int curPressure = pressure[i];
+      int curPressure = pressures[i];
       long curReading;
 
       int maxTries = 3;
@@ -191,7 +191,7 @@ void calibrate()
       numTries += 1;
       // delay(2000);         
 
-      while (curReading == 0 && numTries < maxTries)               // while the reading is invalid and user have not ran out of tries
+      while (curReading == 1 && numTries < maxTries)               // while the reading is invalid and user have not ran out of tries
       {
          numTries += 1;
 
@@ -263,7 +263,7 @@ void printLCD(const char* line1, const char* line2, int waitMs)
    if (waitMs > 0) delay(waitMs);
 }
 
-   // check if stable values. If not return 0.
+   // check if stable values. If not return 1.
 long readAdjustedStable()
 {
    long sum = 0;
@@ -288,7 +288,7 @@ long readAdjustedStable()
 
    if ((maxVal - minVal) > stabilityThreshold)
    {
-      return 0;                                                    // unstable
+      return 1;                                                    // unstable
    }
 
    return sum / samples;                                           // If stable return average
@@ -331,7 +331,26 @@ void setCalibrationValues()
 
 float adjustedToPressure(long sensorValAdjusted)
 {
-   Serial.print(sensorValAdjusted);
+   // If reading is below first calibration point, extrapolate
+   if (sensorValAdjusted <= refValues[0]) {
+      float slope = (float) (pressures[1] - pressures[0]) / (float) (refValues[1] - refValues[0]);
+      return pressures[0] + slope * (sensorValAdjusted - refValues[0]);
+   }
+
+   // If reading is above last calibration point, extrapolate
+   if (sensorValAdjusted >= refValues[refSize-1]) {
+      float slope = (float) (pressures[refSize-1] - pressures[refSize-2]) / 
+                     (float) (refValues[refSize-1] - refValues[refSize-2]);
+      return pressures[refSize-1] + slope * (sensorValAdjusted - refValues[refSize-1]);
+   }
+
+   // Interpolation between two calibration points
+   for (int i = 0; i < refSize-1; i++) {
+      if (sensorValAdjusted >= refValues[i] && sensorValAdjusted <= refValues[i+1]) {
+         float slope = (float) (pressures[i+1] - pressures[i]) / (float) (refValues[i+1] - refValues[i]);
+         return pressures[i] + slope * (sensorValAdjusted - refValues[i]);
+      }
+   }
 }
 
 long readSensorAdjusted()
@@ -350,14 +369,23 @@ void neverCalibratedBefore()
 // TODO: Might convert code to a state machine
 void loop()
 {
-   getCalibrationValues();
-
    // Check if calibration values were set before
    // if not message that Unit tester never calibrated before. back to calibrationAsk(). Maybe x 3 times then go to inifinite loop doing nothing
-
    // if so, read values once and store them in code (array) to use.
+   getCalibrationValues();
 
-   // call adjustedToPressure()
+   long sensorVal = readSensorAdjusted();
+
+   float mmHg = adjustedToPressure(sensorVal);
+
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print("Pressure:");
+   lcd.setCursor(0, 1);
+   lcd.print(mmHg, 1);
+   lcd.print("mmHg");
+
+    
 
    delay(500);
 }
