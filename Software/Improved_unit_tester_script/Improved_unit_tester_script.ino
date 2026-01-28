@@ -189,9 +189,9 @@ void calibrate()
       printLCD("Collecting", "values...");
       curReading = readAdjustedStable();
       numTries += 1;
-      delay(2000);         
+      // delay(2000);         
 
-      while (curReading == 0 && numTries < maxTries)
+      while (curReading == 0 && numTries < maxTries)               // while the reading is invalid and user have not ran out of tries
       {
          numTries += 1;
 
@@ -204,7 +204,7 @@ void calibrate()
 
          printLCD("Collecting", "values...");
          curReading = readAdjustedStable();
-         delay(2000);
+         // delay(2000);
       }
       
       if (numTries == maxTries)
@@ -263,20 +263,69 @@ void printLCD(const char* line1, const char* line2, int waitMs)
    if (waitMs > 0) delay(waitMs);
 }
 
+   // check if stable values. If not return 0.
 long readAdjustedStable()
 {
-   return readSensorAdjusted();
-   // To Do: check if stable values. If not return 0.
+   long sum = 0;
+   int samples = 20;
+
+   long stabilityThreshold = THRESHOLD / 8;
+   long adjusted = readSensorAdjusted();
+
+   long minVal = adjusted;
+   long maxVal = adjusted;
+
+   for (int i = 0; i < samples; i++)
+   {
+      adjusted = readSensorAdjusted();
+
+      minVal = min(minVal, adjusted);
+      maxVal = max(maxVal, adjusted);
+      sum += adjusted;
+
+      delay(100);
+    }
+
+   if ((maxVal - minVal) > stabilityThreshold)
+   {
+      return 0;                                                    // unstable
+   }
+
+   return sum / samples;                                           // If stable return average
 }
 
 void getCalibrationValues()
 {
-   // EEPROM.read(ADDRESS_CALIBRATION_SIGNATURE);
+   uint32_t foundConfirmationNum = EEPROM.read(ADDRESS_CALIBRATION_SIGNATURE);
+
+   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
+   {
+      neverCalibratedBefore();
+   }
+
+   // Set refValues[] to values in EEPROM. Read in a loop.
+   Serial.println("setting refValues[] to values in EEPROM");
+
    return;
 }
 
 void setCalibrationValues()
 {
+   uint32_t foundConfirmationNum = EEPROM.read(ADDRESS_CALIBRATION_SIGNATURE);
+
+   // Avoid rewriting if signature written before. Do not ware out signature data addresses.
+   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
+   {
+      Serial.println("Writing to EEPROM! ");
+      Serial.print("CALIBRATION_SIGNATURE: ");
+      Serial.println(CALIBRATION_SIGNATURE);
+      // write signature to address 0;
+   }
+
+   // Set EEPROM to new values in refValues[]. Write (be careful). 
+   Serial.println("setting EEPROM to values in refValues[]");
+   Serial.println("Writing to EEPROM! ");
+
    return;
 }
 
@@ -292,15 +341,20 @@ long readSensorAdjusted()
    return adjusted;
 }
 
+void neverCalibratedBefore()
+{
+   printLCD("Never calibrated", "before", 5000);
+   calibrationAsk();
+}
+
 // TODO: Might convert code to a state machine
 void loop()
 {
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print("In loop()");
+   getCalibrationValues();
 
    // Check if calibration values were set before
-   // if not message that Unit tester never calibrated before. back to calibrationAsk().
+   // if not message that Unit tester never calibrated before. back to calibrationAsk(). Maybe x 3 times then go to inifinite loop doing nothing
+
    // if so, read values once and store them in code (array) to use.
 
    // call adjustedToPressure()
@@ -348,50 +402,3 @@ void loop()
    // read raw values
    // call adjustedtoPressure() to get pressure
    // display pressure
-
-// Issues: how do I make sure threshold is not too low during CalibrateAsk()? I do not want yes to be accidental. -> If threshold is too low calibration mode would start but not finish (assuming normal sensor fluctuations)
-
-
-
-// void setup() {
-//   Serial.begin(9600);
-//   Serial.println("Unit tester");
-
-//   scale.begin(DOUT, CLK);
-//   scale.set_scale(calibration_factor); //This value is obtained by using the SparkFun_HX711_Calibration sketch
-//   scale.tare(); //Assuming there is no weight on the scale at start up, reset the scale to 0
-
-//   Serial.println("Readings:");
-
-//   lcd.begin(16, 2);
-//   lcd.setBacklight(255);
-//   lcd.clear();
-// }
-
-// void loop() {
-//   M = scale.get_units(10);
-//   Force = M * 9.8 *0.1;//0.1 for 100g to 1kg
-//   //put the value of S in the euqation below
-//   mmhg = Force /0.002423266110171/133.32;//133.32 factors for Pa to mmHg, 0.002423266110171 area for button. 
-//   //0.002423266110171 This number can be obtained by calibration factor S.m
-//   Serial.print("Force: ");
-//   Serial.print(Force); //scale.get_units() returns a float
-//   Serial.print(" N"); 
-//   Serial.println();
-
-//   lcd.clear();
-//   lcd.setCursor(0, 0);  //set the position of the cursor (word,line)
-//   lcd.print("Force:");
-//   lcd.setCursor(8, 0);
-
-//   lcd.print(Force,0);
-//   lcd.setCursor(13, 0);
-//   lcd.print("N");
-//   lcd.setCursor(0,1);
-//   lcd.print("Pressure:");
-//   lcd.setCursor(0,2);
-//   lcd.print(mmhg,0);
-//   lcd.setCursor(4,2);
-//   lcd.print("mmHg");
-  
-// }
