@@ -25,7 +25,7 @@ void confirm(void (*functionPass)(), void (*functionFail)());
 void drawBar(int intentFill, int total);
 void calibrate();
 float adjustedToPressure(long sensorValAdjusted);
-void printLCD(const char* line1, const char* line2 = nullptr, int waitMs = 0);
+void printLCD(const char* line1, const char* line2 = nullptr, unsigned long int waitMs = 0);
 long readAdjustedStable();
 void getCalibrationValues();
 void setCalibrationValues();
@@ -40,11 +40,13 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int ADDRESS_CALIBRATION_SIGNATURE = 0;
 // Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EEPROM if calibration set before at least once
 const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
-const long THRESHOLD = 50000;                                      // adjust this during first set up
+const float THRESHOLD = 50;                                      // 50mmHg threshold so once it's calibrated it depends on the calibration and not the load cell
+const float STABILIY_THRESHOLD = 0.07;
 long zeroOffset;
-int pressures[] = {60, 90, 120, 150, 180, 210, 240, 270};
+int pressures[] = {0, 60, 90, 120, 150, 180, 210, 240, 270};
 const int refSize = sizeof(pressures) / sizeof(pressures[0]);
 long refValues[refSize];
+bool calibrated_this_run = false;
 
 
 // functions
@@ -60,14 +62,20 @@ void setup()
    lcd.init();
    lcd.backlight();
    // Collect offset
+   printLCD("Remove any force", "from the button", 2000);
    printLCD("Zeroing...");
    zeroOffset = scale.read_average(15);
    lcd.clear();
 
    // uint32_t resetVal = 0x00000000;
    // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
+   
+   checkNeverCalibratedBefore();
 
-   calibrationAsk();
+   if (!calibrated_this_run) {
+      getCalibrationValues();
+      calibrationAsk();
+   }
 }
 
 void calibrationAsk()
@@ -84,10 +92,12 @@ void calibrationAsk()
       total = 7;
 
       long absAdjusted = readSensorAdjusted();
+
+      float mmHg = adjustedToPressure(absAdjusted);
       
       intentLevel = THRESHOLD / total;                             // value needed per intentLevel (ie. step or "#").
 
-      intentFill = absAdjusted / intentLevel;                      // number of steps (#) filled with the current press.
+      intentFill = mmHg / intentLevel;                      // number of steps (#) filled with the current press.
       
       timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
       // display time left
@@ -105,10 +115,6 @@ void calibrationAsk()
 
       delay(1000/refreshRatePerSec);
    }
-
-   // If calibration has never been set before go recurse this function.
-   checkNeverCalibratedBefore();
-   // Otherwise default continues to loop().
 }
 
 void confirm(void (*functionPass)(), void (*functionFail)())
@@ -117,14 +123,18 @@ void confirm(void (*functionPass)(), void (*functionFail)())
    int timeLeftConfirmInSec = 3;
 
    long absAdjusted = readSensorAdjusted();
+   
+   float mmHg = adjustedToPressure(absAdjusted);
 
    int timeLeftConfirm = refreshRatePerSec * timeLeftConfirmInSec;
 
    printLCD("Hold for", "sec to confirm");
 
-   while (timeLeftConfirm-- && (absAdjusted >= THRESHOLD/2))
+   while (timeLeftConfirm-- && (mmHg >= THRESHOLD/2))
    {  
       absAdjusted = readSensorAdjusted();
+
+      mmHg = adjustedToPressure(absAdjusted);
 
       int seconds = ((timeLeftConfirm/refreshRatePerSec)+1);
       lcd.setCursor(9, 0);
@@ -135,7 +145,7 @@ void confirm(void (*functionPass)(), void (*functionFail)())
       delay(1000/refreshRatePerSec);
    }
 
-   if (absAdjusted < THRESHOLD/2) 
+   if (mmHg < THRESHOLD/2) 
    {
       // call function for failed confirmation
       (*functionFail)(); 
@@ -167,10 +177,12 @@ void drawBar(int intentFill, int total)
 void calibrate()
 {
    printLCD("Calibration Mode", "", 3000);
+   printLCD("Place cuff", "You have 1min", 60000);
    
-   int i;
+   int i = 0;
+   refValues[i] = 0;
    // loop over desired pressures
-   for (i = 0; i < refSize; i++)
+   for (i = 1; i < refSize; i++)
    {
       int curPressure = pressures[i];
       long curReading;
@@ -191,7 +203,7 @@ void calibrate()
       printLCD("Set cuff", "to     mmHg");           
       lcd.setCursor(3, 1);
       lcd.print(curPressure);
-      delay(5000);                                                 // delay to allow user to set the cuff to correct pressure
+      delay(10000);                                                 // delay to allow user to set the cuff to correct pressure
 
       printLCD("Collecting", "values...");
       curReading = readAdjustedStable();
@@ -249,6 +261,7 @@ void calibrate()
       printLCD("Normal mode", "", 2000);
       getCalibrationValues();
       // Arduino logic goes to loop() directly
+      calibrated_this_run = true;
    } else
    {
       // Disregard changes and set refValues[] back to previous settings
@@ -256,7 +269,7 @@ void calibrate()
    }
 }
 
-void printLCD(const char* line1, const char* line2, int waitMs)
+void printLCD(const char* line1, const char* line2, unsigned long int waitMs)
 {
    lcd.clear();
    lcd.setCursor(0, 0);
@@ -274,9 +287,9 @@ void printLCD(const char* line1, const char* line2, int waitMs)
 long readAdjustedStable()
 {
    long sum = 0;
+   long avg = 0;
    int samples = 20;
-
-   long stabilityThreshold = THRESHOLD / 8;
+   
    long adjusted = readSensorAdjusted();
 
    long minVal = adjusted;
@@ -291,20 +304,22 @@ long readAdjustedStable()
       sum += adjusted;
 
       delay(100);
-    }
+   }
 
-   if ((maxVal - minVal) > stabilityThreshold)
+   avg = sum / samples;
+
+   if ((float)(maxVal - minVal) / (float)avg > STABILIY_THRESHOLD)
    {
       return -1;                                                    // unstable
    }
 
-   return sum / samples;                                           // If stable return average
+   return avg;                                           // If stable return average
 }
 
 void getCalibrationValues()
 {
    checkNeverCalibratedBefore();
-
+   
    int curAddress = ADDRESS_CALIBRATION_SIGNATURE + sizeof(uint32_t);
 
    for (int i = 0; i < refSize; i++)
@@ -393,7 +408,8 @@ void checkNeverCalibratedBefore()
    if (foundConfirmationNum != CALIBRATION_SIGNATURE)
    {
       printLCD("Never calibrated", "before", 5000);
-      calibrationAsk();
+      calibrate();
+      checkNeverCalibratedBefore();                         //  recurse in case calibration fails
    }
 }
 
