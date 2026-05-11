@@ -30,6 +30,7 @@ long readAdjustedStable();
 void getCalibrationValues();
 void setCalibrationValues();
 long readSensorAdjusted();
+bool checkNeverCalibratedBefore();
 
 
 HX711 scale;
@@ -39,14 +40,14 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // Global variables
 const int ADDRESS_CALIBRATION_SIGNATURE = 0;
 // Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EEPROM if calibration set before at least once
-const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
+const uint32_t version_number = 0x001a;                          // version number to force new calibration on major update : 0.0.1-a
+const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5 ^ version_number;       
 const float THRESHOLD = 50;                                      // 50mmHg threshold so once it's calibrated it depends on the calibration and not the load cell
 const float STABILIY_THRESHOLD = 0.07;
 long zeroOffset;
 int pressures[] = {0, 60, 90, 120, 150, 180, 210, 240, 270};
 const int refSize = sizeof(pressures) / sizeof(pressures[0]);
 long refValues[refSize];
-bool calibrated_this_run = false;
 
 
 // functions
@@ -66,11 +67,8 @@ void setup()
    printLCD("Zeroing...");
    zeroOffset = scale.read_average(15);
    lcd.clear();
-
-   // uint32_t resetVal = 0x00000000;
-   // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
    
-   checkNeverCalibratedBefore();
+   bool calibrated_this_run = checkNeverCalibratedBefore();
 
    if (!calibrated_this_run) {
       getCalibrationValues();
@@ -261,7 +259,6 @@ void calibrate()
       printLCD("Normal mode", "", 2000);
       getCalibrationValues();
       // Arduino logic goes to loop() directly
-      calibrated_this_run = true;
    } else
    {
       // Disregard changes and set refValues[] back to previous settings
@@ -329,7 +326,7 @@ void getCalibrationValues()
       Serial.print("Data point ");
       Serial.print(i+1);
       Serial.print(" ");
-      Serial.print(refValues[i]);
+      Serial.println(refValues[i]);
    }
 }
 
@@ -352,7 +349,7 @@ void setCalibrationValues()
       Serial.print("Data point ");
       Serial.print(i+1);
       Serial.print(" ");
-      Serial.print(refValues[i]);
+      Serial.println(refValues[i]);
    }
 
    // Avoid rewriting if signature written before. Do not ware out signature data addresses.
@@ -400,7 +397,7 @@ long readSensorAdjusted()
    return adjusted;
 }
 
-void checkNeverCalibratedBefore()
+bool checkNeverCalibratedBefore()
 {
    uint32_t foundConfirmationNum;
    EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
@@ -410,7 +407,11 @@ void checkNeverCalibratedBefore()
       printLCD("Never calibrated", "before", 5000);
       calibrate();
       checkNeverCalibratedBefore();                         //  recurse in case calibration fails
+
+      return true;
    }
+
+   return false;
 }
 
 void loop()
@@ -425,8 +426,6 @@ void loop()
    lcd.setCursor(0, 1);
    lcd.print(mmHg, 1);
    lcd.print("mmHg");
-
-    
 
    delay(500);
 }
