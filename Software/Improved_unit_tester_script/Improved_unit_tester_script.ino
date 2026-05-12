@@ -22,14 +22,15 @@
 // functions prototypes
 void calibrationAsk();
 void confirm(void (*functionPass)(), void (*functionFail)());
-void drawBar(int intentFill, int total);
+bool isNeverCalibratedBefore();
 void calibrate();
-float adjustedToPressure(long sensorValAdjusted);
-void printLCD(const char* line1, const char* line2 = nullptr, unsigned long int waitMs = 0);
+long readSensorAdjusted();
 long readAdjustedStable();
 void getCalibrationValues();
 void setCalibrationValues();
-long readSensorAdjusted();
+float adjustedToPressure(long sensorValAdjusted);
+void drawBar(int intentFill, int total);
+void printLCD(const char* line1, const char* line2 = nullptr, unsigned long waitMs = 0);
 
 
 HX711 scale;
@@ -46,7 +47,6 @@ long zeroOffset;
 int pressures[] = {0, 60, 90, 120, 150, 180, 210, 240, 270};
 const int refSize = sizeof(pressures) / sizeof(pressures[0]);
 long refValues[refSize];
-bool calibrated_this_run = false;
 
 
 // functions
@@ -67,44 +67,50 @@ void setup()
    zeroOffset = scale.read_average(15);
    lcd.clear();
 
+   // Uncomment the following 2 lines to reset calibration as if never calibrated before (for testing purposes).
    // uint32_t resetVal = 0x00000000;
    // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
    
-   checkNeverCalibratedBefore();
-
-   if (!calibrated_this_run) {
-      getCalibrationValues();
-      calibrationAsk();
-   }
+   calibrationAsk();
 }
 
 void calibrationAsk()
 {
+   // If never calibrated before, go to calibration directly. Otherwise, ask user if they want to calibrate (change current calibration values).
+   if (isNeverCalibratedBefore())
+   {
+      calibrate();
+      return;
+   }
+
+   // Load calibration values from EEPROM if already calibrated
+   getCalibrationValues();
+
    int refreshRatePerSec = 10;
    int timeLeftInSec = 5;
+   int timeLeft = refreshRatePerSec * timeLeftInSec;
+
 
    printLCD("Calibrate?");
 
-   int timeLeft = refreshRatePerSec * timeLeftInSec;
    while(timeLeft--)
    {
-      int intentFill, intentLevel, total;
-      total = 7;
-
-      long absAdjusted = readSensorAdjusted();
-
-      float mmHg = adjustedToPressure(absAdjusted);
-      
-      intentLevel = THRESHOLD / total;                             // value needed per intentLevel (ie. step or "#").
-
-      intentFill = mmHg / intentLevel;                      // number of steps (#) filled with the current press.
-      
       timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
       // display time left
       lcd.setCursor(13, 0);
       lcd.print(timeLeftInSec);
       lcd.print("s ");
 
+
+      int intentFill, intentLevel, total = 7;
+
+      long absAdjusted = readSensorAdjusted();
+      float mmHg = adjustedToPressure(absAdjusted);
+      
+      intentLevel = THRESHOLD / total;                             // value needed per intentLevel (ie. step or "#").
+      intentFill = mmHg / intentLevel;                             // number of steps (#) filled with the current press.
+      
+      
       drawBar(intentFill, total);
 
       if (intentFill >= total)
@@ -120,27 +126,26 @@ void calibrationAsk()
 void confirm(void (*functionPass)(), void (*functionFail)())
 {
    int refreshRatePerSec = 10;
-   int timeLeftConfirmInSec = 3;
+   int timeLeftInSec = 3;
+   int timeLeft = refreshRatePerSec * timeLeftInSec;
 
    long absAdjusted = readSensorAdjusted();
-   
    float mmHg = adjustedToPressure(absAdjusted);
-
-   int timeLeftConfirm = refreshRatePerSec * timeLeftConfirmInSec;
+   
 
    printLCD("Hold for", "sec to confirm");
 
-   while (timeLeftConfirm-- && (mmHg >= THRESHOLD/2))
+   while (timeLeft-- && (mmHg >= THRESHOLD/2))
    {  
       absAdjusted = readSensorAdjusted();
 
       mmHg = adjustedToPressure(absAdjusted);
 
-      int seconds = ((timeLeftConfirm/refreshRatePerSec)+1);
+      timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
       lcd.setCursor(9, 0);
       lcd.print("  ");                                             // Clear previous number
       lcd.setCursor(9, 0);
-      lcd.print(seconds);
+      lcd.print(timeLeftInSec);
 
       delay(1000/refreshRatePerSec);
    }
@@ -157,27 +162,23 @@ void confirm(void (*functionPass)(), void (*functionFail)())
    }
 }
 
-void drawBar(int intentFill, int total)                         
+bool isNeverCalibratedBefore()
 {
-   lcd.setCursor(0, 1);
-   lcd.print("No [");
-   for (int i=0; i < total; i++)
+   uint32_t foundConfirmationNum;
+   EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
+
+   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
    {
-      if (i < intentFill)
-      {
-         lcd.print("#");                                           // Intent bar can later be changed to look prettier
-      } else 
-      {
-         lcd.print(" ");
-      }
+      printLCD("Never calibrated", "before", 5000);
+      return true;
    }
-   lcd.print("] Yes");
+   return false;
 }
 
 void calibrate()
 {
    printLCD("Calibration Mode", "", 3000);
-   printLCD("Place cuff", "You have 1min", 60000);
+   printLCD("Place cuff", "You have 30s", 30000);
    
    int i = 0;
    refValues[i] = 0;
@@ -188,7 +189,7 @@ void calibrate()
       long curReading;
 
       int maxTries = 3;
-      int numTries = 0;
+      int numTries = 1;
 
       long previous;
 
@@ -207,7 +208,7 @@ void calibrate()
 
       printLCD("Collecting", "values...");
       curReading = readAdjustedStable();
-      numTries += 1;
+
 
       while (curReading == -1 && numTries < maxTries)              // while the reading is invalid and user have not ran out of tries
       {
@@ -261,7 +262,6 @@ void calibrate()
       printLCD("Normal mode", "", 2000);
       getCalibrationValues();
       // Arduino logic goes to loop() directly
-      calibrated_this_run = true;
    } else
    {
       // Disregard changes and set refValues[] back to previous settings
@@ -269,21 +269,14 @@ void calibrate()
    }
 }
 
-void printLCD(const char* line1, const char* line2, unsigned long int waitMs)
+long readSensorAdjusted()
 {
-   lcd.clear();
-   lcd.setCursor(0, 0);
-   lcd.print(line1);
-   if (line2)
-   {
-      lcd.setCursor(0, 1);
-      lcd.print(line2);
-   }
-
-   if (waitMs > 0) delay(waitMs);
+   float raw = scale.read();
+   long adjusted = fabs(raw - zeroOffset);                         // fabs() is like abs() but for floats. raw is a float so the subtraction result is a float..
+   return adjusted;
 }
 
-// check if stable values. If not return 1.
+// check if stable values. If not return -1.
 long readAdjustedStable()
 {
    long sum = 0;
@@ -313,12 +306,16 @@ long readAdjustedStable()
       return -1;                                                    // unstable
    }
 
-   return avg;                                           // If stable return average
+   return avg;                                                      // If stable return average
 }
 
 void getCalibrationValues()
 {
-   checkNeverCalibratedBefore();
+   if (isNeverCalibratedBefore())
+   {
+      calibrate();
+      return;
+   }  
    
    int curAddress = ADDRESS_CALIBRATION_SIGNATURE + sizeof(uint32_t);
 
@@ -359,7 +356,7 @@ void setCalibrationValues()
    if (foundConfirmationNum != CALIBRATION_SIGNATURE)
    {
       Serial.println("Writing to EEPROM! ");
-      Serial.print("First time setting up confirmation number");
+      Serial.println("First time setting up confirmation number");
       // write signature to signature address;
       EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, CALIBRATION_SIGNATURE);
    }
@@ -393,24 +390,35 @@ float adjustedToPressure(long sensorValAdjusted)
    }
 }
 
-long readSensorAdjusted()
+void drawBar(int intentFill, int total)                         
 {
-   float raw = scale.read();
-   long adjusted = fabs(raw - zeroOffset);                         // fabs() is like abs() but for floats. raw is a float so the subtraction result is a float..
-   return adjusted;
+   lcd.setCursor(0, 1);
+   lcd.print("No [");
+   for (int i=0; i < total; i++)
+   {
+      if (i < intentFill)
+      {
+         lcd.print("#");                                           // Intent bar can later be changed to look prettier
+      } else 
+      {
+         lcd.print(" ");
+      }
+   }
+   lcd.print("] Yes");
 }
 
-void checkNeverCalibratedBefore()
+void printLCD(const char* line1, const char* line2, unsigned long waitMs)
 {
-   uint32_t foundConfirmationNum;
-   EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
-
-   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
+   lcd.clear();
+   lcd.setCursor(0, 0);
+   lcd.print(line1);
+   if (line2)
    {
-      printLCD("Never calibrated", "before", 5000);
-      calibrate();
-      checkNeverCalibratedBefore();                         //  recurse in case calibration fails
+      lcd.setCursor(0, 1);
+      lcd.print(line2);
    }
+
+   if (waitMs > 0) delay(waitMs);
 }
 
 void loop()
