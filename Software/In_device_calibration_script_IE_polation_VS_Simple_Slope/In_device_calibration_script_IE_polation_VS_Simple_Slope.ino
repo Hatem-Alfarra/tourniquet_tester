@@ -505,11 +505,11 @@ void loop()
 
    lcd.clear();
    lcd.setCursor(0, 0);
-   lcd.print("Pressure:");
-   lcd.setCursor(0, 1);
+   lcd.print("IE: ");
    lcd.print(mmHg_IE, 1);
-   lcd.print("mmHg");
-
+   lcd.setCursor(0,1);
+   lcd.print("Slope: ");
+   lcd.print(mmHg_simpleSlope, 1);
 
    delay(500);
 }
