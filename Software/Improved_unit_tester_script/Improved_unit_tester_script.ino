@@ -20,6 +20,7 @@
 #define SCK_PIN 2
 
 // functions prototypes
+void setThreshold();
 void calibrationAsk();
 void confirm(void (*functionPass)(), void (*functionFail)());
 bool isNeverCalibratedBefore();
@@ -41,8 +42,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int ADDRESS_CALIBRATION_SIGNATURE = 0;
 // Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EEPROM if calibration set before at least once
 const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
-const float THRESHOLD = 50;                                      // 50mmHg threshold so once it's calibrated it depends on the calibration and not the load cell
-const float STABILIY_THRESHOLD = 0.07;
+long threshold;                                      
 long zeroOffset;
 int pressures[] = {0, 60, 90, 120, 150, 180, 210, 240, 270};
 const int refSize = sizeof(pressures) / sizeof(pressures[0]);
@@ -58,6 +58,7 @@ void setup()
    // Initialize HX711
    scale.begin(DT_PIN, SCK_PIN);
 
+
    // Initialize LCD
    lcd.init();
    lcd.backlight();
@@ -65,6 +66,8 @@ void setup()
    printLCD("Remove any force", "from the button", 2000);
    printLCD("Zeroing...");
    zeroOffset = scale.read_average(15);
+
+   setThreshold();                                                  
    lcd.clear();
 
    // Uncomment the following 2 lines to reset calibration as if never calibrated before (for testing purposes).
@@ -72,6 +75,32 @@ void setup()
    // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
    
    calibrationAsk();
+}
+
+void setThreshold()
+{
+   int samples = 20;
+   long sum = 0;
+   long sensorValAdjusted = readSensorAdjusted();
+   long maxVal = sensorValAdjusted;
+   long minVal = sensorValAdjusted;
+
+   for (int i = 0; i < samples; i++)
+   {
+      sensorValAdjusted = readSensorAdjusted();
+
+      sum += sensorValAdjusted;
+      maxVal = max(maxVal, sensorValAdjusted);
+      minVal = min(minVal, sensorValAdjusted);
+      
+
+      delay(50);
+   }  
+   long avg = sum / samples;
+   long noiseRange = maxVal - minVal;
+
+
+   threshold = avg + noiseRange * 30 * 7;                          // Set threshold to be above the noise level. The multiplier can be changed based on testing.
 }
 
 void calibrationAsk()
@@ -83,7 +112,7 @@ void calibrationAsk()
       return;
    }
 
-   // Load calibration values from EEPROM if already calibrated
+   // Load calibration values from EEPROM if calibrated before.
    getCalibrationValues();
 
    int refreshRatePerSec = 10;
@@ -102,14 +131,13 @@ void calibrationAsk()
       lcd.print("s ");
 
 
-      int intentFill, intentLevel, total = 7;
+      int total = 7;
+      long intentFill, intentLevel;
 
-      long absAdjusted = readSensorAdjusted();
-      float mmHg = adjustedToPressure(absAdjusted);
+      long sensorValAdjusted = readSensorAdjusted();
       
-      intentLevel = THRESHOLD / total;                             // value needed per intentLevel (ie. step or "#").
-      intentFill = mmHg / intentLevel;                             // number of steps (#) filled with the current press.
-      
+      intentLevel = threshold / total;                             // value needed per intentLevel (ie. step or "#").
+      intentFill = sensorValAdjusted / intentLevel;                // number of steps (#) filled with the current press.
       
       drawBar(intentFill, total);
 
@@ -126,20 +154,20 @@ void calibrationAsk()
 void confirm(void (*functionPass)(), void (*functionFail)())
 {
    int refreshRatePerSec = 10;
-   int timeLeftInSec = 3;
+   int timeLeftInSec = 5;
    int timeLeft = refreshRatePerSec * timeLeftInSec;
-
-   long absAdjusted = readSensorAdjusted();
-   float mmHg = adjustedToPressure(absAdjusted);
-   
 
    printLCD("Hold for", "sec to confirm");
 
-   while (timeLeft-- && (mmHg >= THRESHOLD/2))
+   long sensorValAdjusted;
+   while (timeLeft--)
    {  
-      absAdjusted = readSensorAdjusted();
+      sensorValAdjusted = readSensorAdjusted();
 
-      mmHg = adjustedToPressure(absAdjusted);
+      if (sensorValAdjusted < threshold/2) 
+      {
+         break;
+      }
 
       timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
       lcd.setCursor(9, 0);
@@ -150,7 +178,7 @@ void confirm(void (*functionPass)(), void (*functionFail)())
       delay(1000/refreshRatePerSec);
    }
 
-   if (mmHg < THRESHOLD/2) 
+   if (sensorValAdjusted < threshold/2) 
    {
       // call function for failed confirmation
       (*functionFail)(); 
@@ -178,12 +206,12 @@ bool isNeverCalibratedBefore()
 void calibrate()
 {
    printLCD("Calibration Mode", "", 3000);
-   printLCD("Place cuff", "You have 30s", 30000);
+   // printLCD("Place cuff", "You have 30s", 30000);                  // TODO: decrement on screen
    
-   int i = 0;
-   refValues[i] = 0;
    // loop over desired pressures
-   for (i = 1; i < refSize; i++)
+   // i is declared outside the loop because it is used after the loop to check if all reference values were collected successfully.
+   int i;
+   for (i = 0; i < refSize; i++)
    {
       int curPressure = pressures[i];
       long curReading;
@@ -195,7 +223,8 @@ void calibrate()
 
       if (i == 0) 
       {
-         previous = 0;
+         refValues[i] = 0;
+         continue;
       } else 
       {
          previous = refValues[i-1];
@@ -204,7 +233,7 @@ void calibrate()
       printLCD("Set cuff", "to     mmHg");           
       lcd.setCursor(3, 1);
       lcd.print(curPressure);
-      delay(10000);                                                 // delay to allow user to set the cuff to correct pressure
+      delay(10000);                                                // delay to allow user to set the cuff to correct pressure
 
       printLCD("Collecting", "values...");
       curReading = readAdjustedStable();
@@ -237,10 +266,9 @@ void calibrate()
          printLCD("Normal mode");
          
          break;
-      } else if (curReading > previous) 
+      } else if (curReading > previous)                            // desired behavior during calibration.
       {
          refValues[i] = curReading;
-         Serial.println(curReading);
       } else 
       {
          printLCD("Value lower", "than expected", 2000);
@@ -301,12 +329,12 @@ long readAdjustedStable()
 
    avg = sum / samples;
 
-   if ((float)(maxVal - minVal) / (float)avg > STABILIY_THRESHOLD)
+   if ((maxVal - minVal) > threshold / 2 )
    {
-      return -1;                                                    // unstable
+      return -1;                                                   // unstable
    }
 
-   return avg;                                                      // If stable return average
+   return avg;                                                     // If stable return average
 }
 
 void getCalibrationValues()
@@ -325,8 +353,8 @@ void getCalibrationValues()
       curAddress += sizeof(refValues[i]);
       Serial.print("Data point ");
       Serial.print(i+1);
-      Serial.print(" ");
-      Serial.print(refValues[i]);
+      Serial.print(": ");
+      Serial.println(refValues[i]);
    }
 }
 
@@ -348,8 +376,8 @@ void setCalibrationValues()
       curAddress += sizeof(refValues[i]);
       Serial.print("Data point ");
       Serial.print(i+1);
-      Serial.print(" ");
-      Serial.print(refValues[i]);
+      Serial.print(": ");
+      Serial.println(refValues[i]);
    }
 
    // Avoid rewriting if signature written before. Do not ware out signature data addresses.
