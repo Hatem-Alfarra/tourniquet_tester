@@ -206,7 +206,16 @@ bool isNeverCalibratedBefore()
 void calibrate()
 {
    printLCD("Calibration Mode", "", 3000);
-   // printLCD("Place cuff", "You have 30s", 30000);                  // TODO: decrement on screen
+   printLCD("Set up cuff", "You have   s");
+   int timeleftInSec = 30;
+   while (timeleftInSec > 0)
+   {
+      lcd.setCursor(9, 1);
+      lcd.print(timeleftInSec);
+      delay(1000);
+      timeleftInSec--;
+   }
+   
    
    // loop over desired pressures
    // i is declared outside the loop because it is used after the loop to check if all reference values were collected successfully.
@@ -217,7 +226,7 @@ void calibrate()
       long curReading;
 
       int maxTries = 3;
-      int numTries = 1;
+      int numTries = 0;
 
       long previous;
 
