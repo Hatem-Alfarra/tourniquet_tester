@@ -15,6 +15,11 @@
 #include "HX711.h"
 #include <LiquidCrystal_I2C.h>
 
+// Debug define goes here. Comment out to disable debug prints. [TODO]
+
+// Reset device as new [TODO]
+
+
 // HX711 pins
 #define DT_PIN  3
 #define SCK_PIN 2
@@ -23,32 +28,38 @@
 void setThreshold();
 void calibrationAsk();
 void confirm(void (*functionPass)(), void (*functionFail)());
-bool isNeverCalibratedBefore();
 void calibrate();
 long readSensorAdjusted();
 long readAdjustedStable();
+bool isNeverCalibratedBefore();
+bool isCalibrationValid();
 void getCalibrationValues();
 void setCalibrationValues();
 float adjustedToPressure(long sensorValAdjusted);
-float adjustedToPressureSimpleSlope(long sensorValAdjusted);
-float adjustedToPressureLinearRegression(long sensorValAdjusted);
-void drawBar(int intentFill, int total);
+float calculateAvgSlope();
+float calculateIntercept(float slope);
+void drawBar(int intentFill);
 void printLCD(const char* line1, const char* line2 = nullptr, unsigned long waitMs = 0);
 
 
-HX711 scale;
-LiquidCrystal_I2C lcd(0x27, 16, 2);
-
-
 // Global variables
-const int ADDRESS_CALIBRATION_SIGNATURE = 0;
-// Arbitrary number that would be found in address ADDRESS_CALIBRATION_SIGNATURE of EEPROM if calibration set before at least once
-const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;       
 long threshold;                                      
 long zeroOffset;
-int pressures[] = {0, 60, 120, 180, 240};
-const int refSize = sizeof(pressures) / sizeof(pressures[0]);
-long refValues[refSize];
+float avgSlope;
+float intercept = 0;
+int pressures[] = {60, 120, 180, 240, 300};
+const int REF_N = sizeof(pressures) / sizeof(pressures[0]);
+long refValues[REF_N];
+const int ADDRESS_CALIBRATION_SIGNATURE = 0;
+const uint32_t CALIBRATION_SIGNATURE = 0xA5A5A5A5;
+const int ADDRESS_REF_VALUES_START = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALIBRATION_SIGNATURE);    
+const int ADDRESS_SLOPE = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALIBRATION_SIGNATURE) + sizeof(refValues);
+const int ADDRESS_INTERCEPT = ADDRESS_SLOPE + sizeof(avgSlope);
+const int INTENT_LEVELS = 7;
+
+// create objects for HX711 and LCD
+HX711 scale;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 
 // functions
@@ -60,19 +71,22 @@ void setup()
    // Initialize HX711
    scale.begin(DT_PIN, SCK_PIN);
 
-
    // Initialize LCD
    lcd.init();
    lcd.backlight();
    // Collect offset
    printLCD("Remove any force", "from the button", 2000);
    printLCD("Zeroing...");
-   zeroOffset = scale.read_average(15);
+   zeroOffset = scale.read_average(20);
+   
+   // Debug print. change to tag [TODO] or remove later.
+   Serial.print("Zero offset: ");
+   Serial.println(zeroOffset);
 
    setThreshold();                                                  
    lcd.clear();
 
-   // Uncomment the following 2 lines to reset calibration as if never calibrated before (for testing purposes).
+   // Uncomment the following 2 lines to reset calibration as if never calibrated before (for testing purposes). Clean up [TODO]
    // uint32_t resetVal = 0x00000000;
    // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
    
@@ -93,29 +107,39 @@ void setThreshold()
 
       sum += sensorValAdjusted;
       maxVal = max(maxVal, sensorValAdjusted);
-      minVal = min(minVal, sensorValAdjusted);
+      minVal = min(minVal, sensorValAdjusted);              // [TODO] min here does not actually give the lowest value because sensorValAdjusted uses abs() and so gives how far a value is from offSet.
       
-
       delay(50);
    }  
    long avg = sum / samples;
    long noiseRange = maxVal - minVal;
 
+   // Debug prints. change to tag [TODO] or remove later.
+   Serial.print("Max value: ");
+   Serial.println(maxVal);
+   Serial.print("Min value: ");
+   Serial.println(minVal);
+   Serial.print("Average noise: ");
+   Serial.println(avg);
+   Serial.print("Noise range: ");
+   Serial.println(noiseRange);
 
-   threshold = avg + noiseRange * 30 * 7;                          // Set threshold to be above the noise level. The multiplier can be changed based on testing.
+   // TODO: If maxVal == minVal the the sensor is likely not working so return an error. If minVal is high then movement durng threshold setting likely happened.
+   // Change min so it is proper. Then compare max sensor val and min sensor val to be relatively close to zeroOffset.
+   // Do this using Relative Difference. dif1 and dif2 = (sensorVal - zeroOffset). Then avgdif = (dif1 + dif2) / 2.
+   // Then (difmax - difmin) / avgdif should be less than some number maybe 1 (meaning that neither of max and min are twice as far from zeroOffset as the other).
+   threshold = avg + noiseRange * 30 * 7;                          // [TODO] avg here is meaningless and should not be used. 
 }
 
 void calibrationAsk()
 {
-   // If never calibrated before, go to calibration directly. Otherwise, ask user if they want to calibrate (change current calibration values).
-   if (isNeverCalibratedBefore())
+   // If never calibrated before or data is corrupted, go to calibration directly. If not the data is loaded.
+   if (!isCalibrationValid())
    {
       calibrate();
       return;
    }
 
-   // Load calibration values from EEPROM if calibrated before.
-   getCalibrationValues();
 
    int refreshRatePerSec = 10;
    int timeLeftInSec = 5;
@@ -132,18 +156,17 @@ void calibrationAsk()
       lcd.print(timeLeftInSec);
       lcd.print("s ");
 
-
-      int total = 7;
+      
       long intentFill, intentLevel;
 
       long sensorValAdjusted = readSensorAdjusted();
       
-      intentLevel = threshold / total;                             // value needed per intentLevel (ie. step or "#").
+      intentLevel = threshold / INTENT_LEVELS;                             // value needed per intentLevel (ie. step or "#").
       intentFill = sensorValAdjusted / intentLevel;                // number of steps (#) filled with the current press.
       
-      drawBar(intentFill, total);
+      drawBar(intentFill);
 
-      if (intentFill >= total)
+      if (intentFill >= INTENT_LEVELS)
       {
          confirm(calibrate, calibrationAsk);
          return;
@@ -168,50 +191,34 @@ void confirm(void (*functionPass)(), void (*functionFail)())
 
       if (sensorValAdjusted < threshold/2) 
       {
-         break;
+         // call function for failed confirmation
+         (*functionFail)(); 
+         return;
       }
 
       timeLeftInSec = (int) ((timeLeft/refreshRatePerSec)+1); 
       lcd.setCursor(9, 0);
-      lcd.print("  ");                                             // Clear previous number
+      lcd.print("  ");
       lcd.setCursor(9, 0);
       lcd.print(timeLeftInSec);
 
       delay(1000/refreshRatePerSec);
    }
-
-   if (sensorValAdjusted < threshold/2) 
-   {
-      // call function for failed confirmation
-      (*functionFail)(); 
-
-   } else 
-   {
-      // call function for passed confirmation
-      (*functionPass)(); 
-   }
-}
-
-bool isNeverCalibratedBefore()
-{
-   uint32_t foundConfirmationNum;
-   EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
-
-   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
-   {
-      printLCD("Never calibrated", "before", 5000);
-      return true;
-   }
-   return false;
+   
+   // call function for passed confirmation
+   (*functionPass)(); 
+   
 }
 
 void calibrate()
 {
    printLCD("Calibration Mode", "", 3000);
    printLCD("Set up cuff", "You have   s");
-   int timeleftInSec = 30;
+   int timeleftInSec = 20;
    while (timeleftInSec > 0)
    {
+      lcd.setCursor(9, 1);
+      lcd.print("  ");
       lcd.setCursor(9, 1);
       lcd.print(timeleftInSec);
       delay(1000);
@@ -222,7 +229,7 @@ void calibrate()
    // loop over desired pressures
    // i is declared outside the loop because it is used after the loop to check if all reference values were collected successfully.
    int i;
-   for (i = 0; i < refSize; i++)
+   for (i = 0; i < REF_N; i++)
    {
       int curPressure = pressures[i];
       long curReading;
@@ -234,8 +241,7 @@ void calibrate()
 
       if (i == 0) 
       {
-         refValues[i] = 0;
-         continue;
+         previous = 0;
       } else 
       {
          previous = refValues[i-1];
@@ -277,7 +283,7 @@ void calibrate()
          printLCD("Normal mode");
          
          break;
-      } else if (curReading > previous)                            // desired behavior during calibration.
+      } else if (curReading > (previous + (threshold / INTENT_LEVELS)))                            // desired behavior during calibration. Instead of 'previous', use previous + threshold/something or something else to make sure same values do not result in valid calibration
       {
          refValues[i] = curReading;
       } else 
@@ -293,17 +299,17 @@ void calibrate()
       }
    }
    // if all reference values were collected
-   if (i == refSize)
+   if (i == REF_N)
    {   
       // write to EEPROM the new ref value (from refValues[])
       setCalibrationValues();
       printLCD("Calibration", "successful", 2000);
       printLCD("Normal mode", "", 2000);
       getCalibrationValues();
-      // Arduino logic goes to loop() directly
+      // Calibration complete, entering normal operation
    } else
    {
-      // Disregard changes and set refValues[] back to previous settings
+      // Disregard changes and set in code values (ie. refValues[]) back to previous settings
       getCalibrationValues();
    }
 }
@@ -340,12 +346,41 @@ long readAdjustedStable()
 
    avg = sum / samples;
 
-   if ((maxVal - minVal) > threshold / 2 )
+   if ((maxVal - minVal) > threshold / 2 )                         // TODO: change 2 to INTENT_LEVELS which would be 7
    {
       return -1;                                                   // unstable
    }
 
    return avg;                                                     // If stable return average
+}
+
+bool isNeverCalibratedBefore()
+{
+   uint32_t foundConfirmationNum;
+   EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
+
+   if (foundConfirmationNum != CALIBRATION_SIGNATURE)
+   {
+      printLCD("Never calibrated", "before", 5000);
+      return true;
+   }
+   return false;
+}
+
+bool isCalibrationValid()
+{
+   if (isNeverCalibratedBefore()) 
+   {
+      return false;
+   }
+
+   getCalibrationValues();
+   float calcSlope = calculateAvgSlope();
+   float calcIntercept = calculateIntercept(calcSlope);
+
+
+   // return fabs(calcSlope - avgSlope) < 0.0001; // I do not like this magic number. Figure something better out [TODO]
+   return calcSlope == avgSlope && calcIntercept == intercept;
 }
 
 void getCalibrationValues()
@@ -356,17 +391,22 @@ void getCalibrationValues()
       return;
    }  
    
-   int curAddress = ADDRESS_CALIBRATION_SIGNATURE + sizeof(uint32_t);
+   int curAddress = ADDRESS_REF_VALUES_START;
 
-   for (int i = 0; i < refSize; i++)
+   for (int i = 0; i < REF_N; i++)
    {
       EEPROM.get(curAddress, refValues[i]);
       curAddress += sizeof(refValues[i]);
+      
+      // debug print. change to tag [TODO] or remove later.
       Serial.print("Data point ");
       Serial.print(i+1);
       Serial.print(": ");
       Serial.println(refValues[i]);
    }
+
+   EEPROM.get(ADDRESS_SLOPE, avgSlope);
+   EEPROM.get(ADDRESS_INTERCEPT, intercept);
 }
 
 void setCalibrationValues()
@@ -375,104 +415,83 @@ void setCalibrationValues()
    EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
    
    
-   // Set EEPROM to new values in refValues[]. Write (be careful). 
-   Serial.println("setting EEPROM to values in refValues[]");
-   Serial.println("Writing to EEPROM! ");
-
-   int curAddress = ADDRESS_CALIBRATION_SIGNATURE + sizeof(uint32_t);
-
-   for (int i = 0; i < refSize; i++)
+   // Set EEPROM to new values in refValues[]. Write to memory (be careful of wearout). 
+   int curAddress = ADDRESS_REF_VALUES_START;
+   for (int i = 0; i < REF_N; i++)
    {
       EEPROM.put(curAddress, refValues[i]);
       curAddress += sizeof(refValues[i]);
+
+      // debug print. change to tag [TODO] or remove later.
       Serial.print("Data point ");
       Serial.print(i+1);
       Serial.print(": ");
       Serial.println(refValues[i]);
    }
 
+   avgSlope = calculateAvgSlope();
+   EEPROM.put(ADDRESS_SLOPE, avgSlope);
+
+   intercept = calculateIntercept(avgSlope);
+   EEPROM.put(ADDRESS_INTERCEPT, intercept);
+
    // Avoid rewriting if signature written before. Do not ware out signature data addresses.
    if (foundConfirmationNum != CALIBRATION_SIGNATURE)
    {
-      Serial.println("Writing to EEPROM! ");
-      Serial.println("First time setting up confirmation number");
-      // write signature to signature address;
       EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, CALIBRATION_SIGNATURE);
    }
 
 }
 
-// Uses linear interpolation and extrapolation. 
 float adjustedToPressure(long sensorValAdjusted)
 {
-   // If reading is below first calibration point, extrapolate
-   if (sensorValAdjusted <= refValues[0]) 
-   {
-      float slope = (float) (pressures[1] - pressures[0]) / (float) (refValues[1] - refValues[0]);
-      return pressures[0] + slope * (sensorValAdjusted - refValues[0]);
-   }
-
-   // If reading is above last calibration point, extrapolate
-   if (sensorValAdjusted >= refValues[refSize-1])
-   {
-      float slope = (float) (pressures[refSize-1] - pressures[refSize-2]) / 
-                     (float) (refValues[refSize-1] - refValues[refSize-2]);
-      return pressures[refSize-1] + slope * (sensorValAdjusted - refValues[refSize-1]);
-   }
-
-   // Interpolation between two calibration points
-   for (int i = 0; i < refSize-1; i++) {
-      if (sensorValAdjusted >= refValues[i] && sensorValAdjusted <= refValues[i+1]) 
-      {
-         float slope = (float) (pressures[i+1] - pressures[i]) / (float) (refValues[i+1] - refValues[i]);
-         return pressures[i] + slope * (sensorValAdjusted - refValues[i]);
-      }
-   }
+   return (avgSlope * sensorValAdjusted) + intercept;
 }
 
-// Uses slope from origin to last point.
-float adjustedToPressureSimpleSlope(long sensorValAdjusted)
+float calculateAvgSlope()
 {
-   float slope = (float) pressures[refSize-1] / (float) refValues[refSize-1];
-   return slope * sensorValAdjusted;
+   float sumSlopes = 0;
+   for (int i = 1; i < REF_N; i++)
+   {
+      sumSlopes += (float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]);
+
+      // TODO: Debug tag
+      Serial.print("Slope for data point ");
+      Serial.print(i+1);
+      Serial.print(": ");
+      Serial.println((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
+
+   }
+   Serial.print("Average slope: ");
+   Serial.println(sumSlopes / (REF_N-1), 10);
+   return sumSlopes / (REF_N-1);
 }
 
-// Uses linear regression to find the best fit line for all calibration points, then uses that line to calculate pressure.
-float adjustedToPressureLinearRegression(long sensorValAdjusted)
+float calculateIntercept(float slope)
 {
-   // Calculate means
-   float meanX = 0;
-   float meanY = 0;
-   for (int i = 0; i < refSize; i++) {
-      meanX += refValues[i];
-      meanY += pressures[i];
-   }
-   meanX /= refSize;
-   meanY /= refSize;
+   float sumIntercepts = 0;
+   for (int i = 0; i < REF_N; i++)
+   {
+      sumIntercepts += pressures[i] - slope * refValues[i];
 
-   // Calculate slope (m) and intercept (b) for line of best fit: y = mx + b
-   float numerator = 0;
-   float denominator = 0;
-   for (int i = 0; i < refSize; i++) {
-      numerator += (refValues[i] - meanX) * (pressures[i] - meanY);
-      denominator += (refValues[i] - meanX) * (refValues[i] - meanX);
+      // TODO: Debug tag
+      Serial.print("Intercept for data point ");
+      Serial.print(i+1);
+      Serial.print(": ");
+      Serial.println(pressures[i] - slope * refValues[i], 10);
    }
-   float m = numerator / denominator;
-   float b = meanY - m * meanX;
-
-   // Use line of best fit to calculate pressure from sensor value
-   return m * sensorValAdjusted + b;
+   return sumIntercepts / REF_N;
 }
 
-void drawBar(int intentFill, int total)                         
+void drawBar(int intentFill)                         
 {
    lcd.setCursor(0, 1);
    lcd.print("No [");
-   for (int i=0; i < total; i++)
+   for (int i=0; i < INTENT_LEVELS; i++)
    {
       if (i < intentFill)
       {
-         lcd.print("#");                                           // Intent bar can later be changed to look prettier
+         lcd.print("#");                                           // [TODO] Intent bar can later be changed to look prettier
       } else 
       {
          lcd.print(" ");
@@ -499,15 +518,15 @@ void loop()
 {
    long sensorVal = readSensorAdjusted();
 
-   float mmHg_IE = adjustedToPressure(sensorVal);
-   float mmHg_simpleSlope = adjustedToPressureSimpleSlope(sensorVal);
-   float mmHg_linearRegression = adjustedToPressureLinearRegression(sensorVal);
+   float mmHg = adjustedToPressure(sensorVal);
+
+   if (mmHg < 5) {mmHg = 0;}
 
    lcd.clear();
    lcd.setCursor(0, 0);
    lcd.print("Pressure:");
    lcd.setCursor(0, 1);
-   lcd.print(mmHg_IE, 1);
+   lcd.print(mmHg, 1);
    lcd.print("mmHg");
 
 
