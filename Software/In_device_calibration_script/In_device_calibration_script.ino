@@ -56,6 +56,7 @@ const int ADDRESS_REF_VALUES_START = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALI
 const int ADDRESS_SLOPE = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALIBRATION_SIGNATURE) + sizeof(refValues);
 const int ADDRESS_INTERCEPT = ADDRESS_SLOPE + sizeof(avgSlope);
 const int INTENT_LEVELS = 7;
+const int NOISE_MULTIPLIER = 10;
 
 // create objects for HX711 and LCD
 HX711 scale;
@@ -95,40 +96,67 @@ void setup()
 
 void setThreshold()
 {
-   int samples = 20;
-   long sum = 0;
-   long sensorValAdjusted = readSensorAdjusted();
-   long maxVal = sensorValAdjusted;
-   long minVal = sensorValAdjusted;
+   printLCD("Threshold", "setting...");
+   int samples = 40;
+   long sensorValRaw = scale.read();
+   long maxVal = sensorValRaw;
+   long minVal = sensorValRaw;
 
    for (int i = 0; i < samples; i++)
    {
-      sensorValAdjusted = readSensorAdjusted();
+      sensorValRaw = scale.read();
 
-      sum += sensorValAdjusted;
-      maxVal = max(maxVal, sensorValAdjusted);
-      minVal = min(minVal, sensorValAdjusted);              // [TODO] min here does not actually give the lowest value because sensorValAdjusted uses abs() and so gives how far a value is from offSet.
-      
+      maxVal = max(maxVal, sensorValRaw);
+      minVal = min(minVal, sensorValRaw);             
+
       delay(50);
    }  
-   long avg = sum / samples;
-   long noiseRange = maxVal - minVal;
 
    // Debug prints. change to tag [TODO] or remove later.
    Serial.print("Max value: ");
    Serial.println(maxVal);
    Serial.print("Min value: ");
    Serial.println(minVal);
-   Serial.print("Average noise: ");
-   Serial.println(avg);
-   Serial.print("Noise range: ");
-   Serial.println(noiseRange);
 
-   // TODO: If maxVal == minVal the the sensor is likely not working so return an error. If minVal is high then movement durng threshold setting likely happened.
-   // Change min so it is proper. Then compare max sensor val and min sensor val to be relatively close to zeroOffset.
-   // Do this using Relative Difference. dif1 and dif2 = (sensorVal - zeroOffset). Then avgdif = (dif1 + dif2) / 2.
-   // Then (difmax - difmin) / avgdif should be less than some number maybe 1 (meaning that neither of max and min are twice as far from zeroOffset as the other).
-   threshold = avg + noiseRange * 30 * 7;                          // [TODO] avg here is meaningless and should not be used. 
+   if (maxVal == minVal)
+   {
+      printLCD("Sensor error!", "Check connections");
+      while(true);
+   }
+
+   long dif1  = abs(maxVal - zeroOffset);
+   long dif2 = abs(minVal - zeroOffset);
+   long difmax = max(dif1, dif2);
+   long difmin = min(dif1, dif2);
+   float difratio = (float) difmax / (float) difmin;
+
+   Serial.print("Zero offset: ");
+   Serial.println(zeroOffset);
+   Serial.print("Difference max: ");
+   Serial.println(difmax);
+   Serial.print("Difference min: ");
+   Serial.println(difmin);
+   Serial.print("Difference ratio: ");
+   Serial.println(difratio);
+
+   if (difmin == 0 || minVal >= zeroOffset || maxVal <= zeroOffset)
+   {
+      printLCD("Rezeroing...", "", 1000);
+      zeroOffset = scale.read_average(20);
+      setThreshold();
+      return;
+   }
+   else if (difratio > 2.0){
+      printLCD("Keep device", "steady, retrying", 4000);
+      setThreshold();
+      return;
+   }
+   else
+   {
+      threshold = (difmax*2) * NOISE_MULTIPLIER * INTENT_LEVELS;
+      Serial.print("Threshold set to: ");
+      Serial.println(threshold);
+   }
 }
 
 void calibrationAsk()
@@ -162,7 +190,7 @@ void calibrationAsk()
       long sensorValAdjusted = readSensorAdjusted();
       
       intentLevel = threshold / INTENT_LEVELS;                             // value needed per intentLevel (ie. step or "#").
-      intentFill = sensorValAdjusted / intentLevel;                // number of steps (#) filled with the current press.
+      intentFill = sensorValAdjusted / intentLevel;                        // number of steps (#) filled with the current press.
       
       drawBar(intentFill);
 
@@ -317,7 +345,7 @@ void calibrate()
 long readSensorAdjusted()
 {
    float raw = scale.read();
-   long adjusted = fabs(raw - zeroOffset);                         // fabs() is like abs() but for floats. raw is a float so the subtraction result is a float..
+   long adjusted = fabs(raw - zeroOffset);
    return adjusted;
 }
 
@@ -346,7 +374,7 @@ long readAdjustedStable()
 
    avg = sum / samples;
 
-   if ((maxVal - minVal) > threshold / 2 )                         // TODO: change 2 to INTENT_LEVELS which would be 7
+   if ((maxVal - minVal) > threshold / 2 )
    {
       return -1;                                                   // unstable
    }
@@ -378,8 +406,7 @@ bool isCalibrationValid()
    float calcSlope = calculateAvgSlope();
    float calcIntercept = calculateIntercept(calcSlope);
 
-
-   // return fabs(calcSlope - avgSlope) < 0.0001; // I do not like this magic number. Figure something better out [TODO]
+   // check for data corruption and/or unsuccessful changes (ie. removing power during the write process). 
    return calcSlope == avgSlope && calcIntercept == intercept;
 }
 
@@ -399,10 +426,10 @@ void getCalibrationValues()
       curAddress += sizeof(refValues[i]);
       
       // debug print. change to tag [TODO] or remove later.
-      Serial.print("Data point ");
-      Serial.print(i+1);
-      Serial.print(": ");
-      Serial.println(refValues[i]);
+      // Serial.print("Data point ");
+      // Serial.print(i+1);
+      // Serial.print(": ");
+      // Serial.println(refValues[i]);
    }
 
    EEPROM.get(ADDRESS_SLOPE, avgSlope);
@@ -423,10 +450,10 @@ void setCalibrationValues()
       curAddress += sizeof(refValues[i]);
 
       // debug print. change to tag [TODO] or remove later.
-      Serial.print("Data point ");
-      Serial.print(i+1);
-      Serial.print(": ");
-      Serial.println(refValues[i]);
+      // Serial.print("Data point ");
+      // Serial.print(i+1);
+      // Serial.print(": ");
+      // Serial.println(refValues[i]);
    }
 
    avgSlope = calculateAvgSlope();
@@ -456,14 +483,14 @@ float calculateAvgSlope()
       sumSlopes += (float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]);
 
       // TODO: Debug tag
-      Serial.print("Slope for data point ");
-      Serial.print(i+1);
-      Serial.print(": ");
-      Serial.println((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
+      // Serial.print("Slope for data point ");
+      // Serial.print(i+1);
+      // Serial.print(": ");
+      // Serial.println((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
 
    }
-   Serial.print("Average slope: ");
-   Serial.println(sumSlopes / (REF_N-1), 10);
+   // Serial.print("Average slope: ");
+   // Serial.println(sumSlopes / (REF_N-1), 10);
    return sumSlopes / (REF_N-1);
 }
 
@@ -475,10 +502,10 @@ float calculateIntercept(float slope)
       sumIntercepts += pressures[i] - slope * refValues[i];
 
       // TODO: Debug tag
-      Serial.print("Intercept for data point ");
-      Serial.print(i+1);
-      Serial.print(": ");
-      Serial.println(pressures[i] - slope * refValues[i], 10);
+      // Serial.print("Intercept for data point ");
+      // Serial.print(i+1);
+      // Serial.print(": ");
+      // Serial.println(pressures[i] - slope * refValues[i], 10);
    }
    return sumIntercepts / REF_N;
 }
