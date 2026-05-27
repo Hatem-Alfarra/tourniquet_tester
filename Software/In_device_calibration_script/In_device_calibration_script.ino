@@ -106,7 +106,7 @@ void setup()
 void setThreshold()
 {
    printLCD("Threshold", "setting...");
-   int samples = 40;
+   int samples = 20;
    long sensorValRaw = scale.read();
    long maxVal = sensorValRaw;
    long minVal = sensorValRaw;
@@ -154,7 +154,8 @@ void setThreshold()
       setThreshold();
       return;
    }
-   else if (diffratio > 2.0){
+   else if (diffratio > 3.0)
+   {
       printLCD("Keep device", "steady, retrying", 4000);
       setThreshold();
       return;
@@ -169,8 +170,7 @@ void setThreshold()
 
 void calibrationAsk()
 {
-   // If never calibrated before or data is corrupted, go to calibration directly. If not the data is loaded.
-   if (!isCalibrationValid())
+   if (! isCalibrationValid())
    {
       calibrate();
       return;
@@ -197,8 +197,8 @@ void calibrationAsk()
 
       long sensorValAdjusted = readSensorAdjusted();
       
-      intentLevel = threshold / INTENT_LEVELS;                             // value needed per intentLevel (ie. step or block).
-      intentFill = sensorValAdjusted / intentLevel;                        // number of steps (block) filled with the current press.
+      intentLevel = threshold / INTENT_LEVELS;                            
+      intentFill = sensorValAdjusted / intentLevel;                       
       
       drawBar(intentFill);
 
@@ -227,7 +227,6 @@ void confirm(void (*functionPass)(), void (*functionFail)())
 
       if (sensorValAdjusted < threshold/2) 
       {
-         // call function for failed confirmation
          (*functionFail)(); 
          return;
       }
@@ -241,7 +240,6 @@ void confirm(void (*functionPass)(), void (*functionFail)())
       delay(1000/refreshRatePerSec);
    }
    
-   // call function for passed confirmation
    (*functionPass)(); 
    
 }
@@ -262,9 +260,9 @@ void calibrate()
    }
    
    
-   // loop over desired pressures
    // i is declared outside the loop because it is used after the loop to check if all reference values were collected successfully.
    int i;
+   // loop over desired pressures
    for (i = 0; i < REF_N; i++)
    {
       int curPressure = pressures[i];
@@ -292,7 +290,7 @@ void calibrate()
       curReading = readAdjustedStable();
 
 
-      while (curReading == -1 && numTries < maxTries)              // while the reading is invalid and user have not ran out of tries
+      while (curReading == -1 && numTries <= maxTries)              // while the reading is invalid and user have not ran out of tries
       {
          numTries += 1;
 
@@ -316,10 +314,10 @@ void calibrate()
          // Disregard changes and set refValues[] back to previous settings
          getCalibrationValues();
 
-         printLCD("Normal mode");
+         printLCD("Normal mode", "", 2000);
          
          break;
-      } else if (curReading > (previous + (threshold / INTENT_LEVELS)))                            // desired behavior during calibration. Instead of 'previous', use previous + threshold/something or something else to make sure same values do not result in valid calibration
+      } else if (curReading > (previous + (threshold / INTENT_LEVELS)))                         
       {
          refValues[i] = curReading;
       } else 
@@ -397,7 +395,7 @@ bool isNeverCalibratedBefore()
 
    if (foundConfirmationNum != CALIBRATION_SIGNATURE)
    {
-      printLCD("Never calibrated", "before", 5000);
+      printLCD("Never calibrated", "before");
       return true;
    }
    return false;
@@ -407,6 +405,7 @@ bool isCalibrationValid()
 {
    if (isNeverCalibratedBefore()) 
    {
+      delay(5000);                                                   // delay to allow user to read the message
       return false;
    }
 
@@ -449,7 +448,7 @@ void setCalibrationValues()
    EEPROM.get(ADDRESS_CALIBRATION_SIGNATURE, foundConfirmationNum);
    
    
-   // Set EEPROM to new values in refValues[]. Write to memory (be careful of wearout). 
+   // Write calibration data to EEPROM (put() avoids unnecessary writes to reduce wearout)
    int curAddress = ADDRESS_REF_VALUES_START;
    for (int i = 0; i < REF_N; i++)
    {
