@@ -15,9 +15,20 @@
 #include "HX711.h"
 #include <LiquidCrystal_I2C.h>
 
-// Debug define goes here. Comment out to disable debug prints. [TODO]
+// Debug define. UnComment "#define DEBUG" to enable debug serial prints.
+#define DEBUG
+#ifdef DEBUG
+   #define DEBUG_PRINT(x)         Serial.print(x)
+   #define DEBUG_PRINTLN(x)       Serial.println(x)
+   #define DEBUG_PRINTDECIMAL(x, y) Serial.print(x, y) 
+#else
+   #define DEBUG_PRINT(x)
+   #define DEBUG_PRINTLN(x)
+   #define DEBUG_PRINTDECIMAL(x, y)
+#endif
 
-// Reset device as new [TODO]
+// Uncomment to reset device as if never calibrated before. Re-comment after use.
+// #define RESET_DEVICE
 
 
 // HX711 pins
@@ -80,17 +91,15 @@ void setup()
    printLCD("Zeroing...");
    zeroOffset = scale.read_average(20);
    
-   // Debug print. change to tag [TODO] or remove later.
-   Serial.print("Zero offset: ");
-   Serial.println(zeroOffset);
 
    setThreshold();                                                  
    lcd.clear();
 
-   // Uncomment the following 2 lines to reset calibration as if never calibrated before (for testing purposes). Clean up [TODO]
-   // uint32_t resetVal = 0x00000000;
-   // EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
-   
+   #ifdef RESET_DEVICE
+      uint32_t resetVal = 0x00000000;
+      EEPROM.put(ADDRESS_CALIBRATION_SIGNATURE, resetVal);
+   #endif
+
    calibrationAsk();
 }
 
@@ -112,11 +121,10 @@ void setThreshold()
       delay(50);
    }  
 
-   // Debug prints. change to tag [TODO] or remove later.
-   Serial.print("Max value: ");
-   Serial.println(maxVal);
-   Serial.print("Min value: ");
-   Serial.println(minVal);
+   DEBUG_PRINT("Max value: ");
+   DEBUG_PRINTLN(maxVal);
+   DEBUG_PRINT("Min value: ");
+   DEBUG_PRINTLN(minVal);
 
    if (maxVal == minVal)
    {
@@ -124,38 +132,38 @@ void setThreshold()
       while(true);
    }
 
-   long dif1  = abs(maxVal - zeroOffset);
-   long dif2 = abs(minVal - zeroOffset);
-   long difmax = max(dif1, dif2);
-   long difmin = min(dif1, dif2);
-   float difratio = (float) difmax / (float) difmin;
+   long diff1  = abs(maxVal - zeroOffset);
+   long diff2 = abs(minVal - zeroOffset);
+   long diffmax = max(diff1, diff2);
+   long diffmin = min(diff1, diff2);
+   float diffratio = (float) diffmax / (float) diffmin;
 
-   Serial.print("Zero offset: ");
-   Serial.println(zeroOffset);
-   Serial.print("Difference max: ");
-   Serial.println(difmax);
-   Serial.print("Difference min: ");
-   Serial.println(difmin);
-   Serial.print("Difference ratio: ");
-   Serial.println(difratio);
+   DEBUG_PRINT("Zero offset: ");
+   DEBUG_PRINTLN(zeroOffset);
+   DEBUG_PRINT("Difference max: ");
+   DEBUG_PRINTLN(diffmax);
+   DEBUG_PRINT("Difference min: ");
+   DEBUG_PRINTLN(diffmin);
+   DEBUG_PRINT("Difference ratio: ");
+   DEBUG_PRINTLN(diffratio);
 
-   if (difmin == 0 || minVal >= zeroOffset || maxVal <= zeroOffset)
+   if (diffmin == 0 || minVal >= zeroOffset || maxVal <= zeroOffset)
    {
       printLCD("Rezeroing...", "", 1000);
       zeroOffset = scale.read_average(20);
       setThreshold();
       return;
    }
-   else if (difratio > 2.0){
+   else if (diffratio > 2.0){
       printLCD("Keep device", "steady, retrying", 4000);
       setThreshold();
       return;
    }
    else
    {
-      threshold = (difmax*2) * NOISE_MULTIPLIER * INTENT_LEVELS;
-      Serial.print("Threshold set to: ");
-      Serial.println(threshold);
+      threshold = (diffmax*2) * NOISE_MULTIPLIER * INTENT_LEVELS;
+      DEBUG_PRINT("Threshold set to: ");
+      DEBUG_PRINTLN(threshold);
    }
 }
 
@@ -425,11 +433,10 @@ void getCalibrationValues()
       EEPROM.get(curAddress, refValues[i]);
       curAddress += sizeof(refValues[i]);
       
-      // debug print. change to tag [TODO] or remove later.
-      // Serial.print("Data point ");
-      // Serial.print(i+1);
-      // Serial.print(": ");
-      // Serial.println(refValues[i]);
+      DEBUG_PRINT("Data point ");
+      DEBUG_PRINT(i+1);
+      DEBUG_PRINT(": ");
+      DEBUG_PRINTLN(refValues[i]);
    }
 
    EEPROM.get(ADDRESS_SLOPE, avgSlope);
@@ -448,12 +455,6 @@ void setCalibrationValues()
    {
       EEPROM.put(curAddress, refValues[i]);
       curAddress += sizeof(refValues[i]);
-
-      // debug print. change to tag [TODO] or remove later.
-      // Serial.print("Data point ");
-      // Serial.print(i+1);
-      // Serial.print(": ");
-      // Serial.println(refValues[i]);
    }
 
    avgSlope = calculateAvgSlope();
@@ -482,15 +483,15 @@ float calculateAvgSlope()
    {
       sumSlopes += (float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]);
 
-      // TODO: Debug tag
-      // Serial.print("Slope for data point ");
-      // Serial.print(i+1);
-      // Serial.print(": ");
-      // Serial.println((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
+      DEBUG_PRINT("Slope for data point ");
+      DEBUG_PRINTLN(i+1);
+      DEBUG_PRINT(": ");
+      DEBUG_PRINTDECIMAL((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
 
    }
-   // Serial.print("Average slope: ");
-   // Serial.println(sumSlopes / (REF_N-1), 10);
+   DEBUG_PRINT("Average slope: ");
+   DEBUG_PRINTDECIMAL(sumSlopes / (REF_N-1), 10);
+
    return sumSlopes / (REF_N-1);
 }
 
@@ -501,11 +502,10 @@ float calculateIntercept(float slope)
    {
       sumIntercepts += pressures[i] - slope * refValues[i];
 
-      // TODO: Debug tag
-      // Serial.print("Intercept for data point ");
-      // Serial.print(i+1);
-      // Serial.print(": ");
-      // Serial.println(pressures[i] - slope * refValues[i], 10);
+      DEBUG_PRINT("Intercept for data point ");
+      DEBUG_PRINT(i+1);
+      DEBUG_PRINT(": ");
+      DEBUG_PRINTDECIMAL(pressures[i] - slope * refValues[i], 10);
    }
    return sumIntercepts / REF_N;
 }
