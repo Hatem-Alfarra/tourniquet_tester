@@ -67,7 +67,7 @@ const int ADDRESS_REF_VALUES_START = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALI
 const int ADDRESS_SLOPE = ADDRESS_CALIBRATION_SIGNATURE + sizeof(CALIBRATION_SIGNATURE) + sizeof(refValues);
 const int ADDRESS_INTERCEPT = ADDRESS_SLOPE + sizeof(avgSlope);
 const int INTENT_LEVELS = 7;
-const int NOISE_MULTIPLIER = 10;
+const int NOISE_MULTIPLIER = 20;
 
 // create objects for HX711 and LCD
 HX711 scale;
@@ -197,8 +197,8 @@ void calibrationAsk()
 
       long sensorValAdjusted = readSensorAdjusted();
       
-      intentLevel = threshold / INTENT_LEVELS;                             // value needed per intentLevel (ie. step or "#").
-      intentFill = sensorValAdjusted / intentLevel;                        // number of steps (#) filled with the current press.
+      intentLevel = threshold / INTENT_LEVELS;                             // value needed per intentLevel (ie. step or block).
+      intentFill = sensorValAdjusted / intentLevel;                        // number of steps (block) filled with the current press.
       
       drawBar(intentFill);
 
@@ -484,13 +484,15 @@ float calculateAvgSlope()
       sumSlopes += (float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]);
 
       DEBUG_PRINT("Slope for data point ");
-      DEBUG_PRINTLN(i+1);
+      DEBUG_PRINT(i+1);
       DEBUG_PRINT(": ");
       DEBUG_PRINTDECIMAL((float) (pressures[i] - pressures[0]) / (float) (refValues[i] - refValues[0]), 10);
+      DEBUG_PRINTLN("");
 
    }
    DEBUG_PRINT("Average slope: ");
    DEBUG_PRINTDECIMAL(sumSlopes / (REF_N-1), 10);
+   DEBUG_PRINTLN("");
 
    return sumSlopes / (REF_N-1);
 }
@@ -506,6 +508,7 @@ float calculateIntercept(float slope)
       DEBUG_PRINT(i+1);
       DEBUG_PRINT(": ");
       DEBUG_PRINTDECIMAL(pressures[i] - slope * refValues[i], 10);
+      DEBUG_PRINTLN("");
    }
    return sumIntercepts / REF_N;
 }
@@ -518,7 +521,7 @@ void drawBar(int intentFill)
    {
       if (i < intentFill)
       {
-         lcd.print("#");                                           // [TODO] Intent bar can later be changed to look prettier
+         lcd.write(0xFF);                                        
       } else 
       {
          lcd.print(" ");
